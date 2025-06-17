@@ -1,0 +1,586 @@
+---
+title: "rmc_final_proj"
+author: Olugbenga Asaolu
+format: dashboard
+editor: visual
+---
+
+```{r}
+if(!require('pacman')) install.packages('pacman')
+
+pacman::p_load(tidyverse,
+               colorspace,
+               ggspatial,
+               janitor,
+               ggplot2,
+               readxl,
+               spData,
+               units,
+               here,
+               sf, 
+               rgeoboundaries,
+               rnaturalearth,  
+               tibble,
+               terra,
+               dplyr,
+               tidyr,
+               readr,
+               prettymapr,tidyr,
+               stringr,visdat, 
+               inspectdf,
+               gtsummary, reactable, scales, plotly,crosstalk,countrycode,leaflet, echarts4r ))
+
+pacman::p_load_gh("yutannihilation/ggsflabel",
+                  "afrimapr/afrihealthsites",
+                  "afrimapr/afrilearndata",
+                  "avallecam/epihelper")
+```
+
+
+```{r}
+bmi <- read_csv(here::here("data/body_mass_index_bmi_men_kgperm2.csv"))
+bmi
+```
+
+
+```{r}
+pc <- read_csv(here::here("data/prostate_cancer_number_of_male_deaths.csv"))
+pc 
+```
+
+
+```{r}
+smk <- read_csv(here::here("data/smoking_adults_percent_of_population_over_age_15.csv"))
+smk
+```
+
+```{r}
+bmi_long <-bmi %>% 
+  pivot_longer(
+    cols = matches("^(19|20)\\d{2}$"),  # matches year-like column names
+    names_to = "year", 
+    values_to = "bmi"
+  ) %>% 
+  mutate(year = as.integer(year))  # convert character year to integer
+bmi_long
+```
+```{r}
+pc_long <-pc %>% 
+  pivot_longer(
+    cols = matches("^(19|20)\\d{2}$"),  # matches year-like column names
+    names_to = "year", 
+    values_to = "prostate_deaths"
+  ) %>% 
+  mutate(year = as.integer(year))  # convert character year to integer
+pc_long
+```
+
+```{r}
+smk_long <-smk %>% 
+  pivot_longer(
+    cols = matches("^(19|20)\\d{2}$"),  # matches year-like column names
+    names_to = "year", 
+    values_to = "smokers_percent"
+  ) %>% 
+  mutate(year = as.integer(year))  # convert character year to integer
+smk_long
+```
+
+```{r}
+bmi_pc_long_joined <- 
+  bmi_long %>%
+  left_join(pc_long, by = c("country", "year"))
+bmi_pc_long_joined
+```
+```{r}
+bmi_pc_smk_joined <- 
+  bmi_pc_long_joined %>%
+  left_join(smk_long, by = c("country", "year"))
+bmi_pc_smk_joined 
+```
+
+```{r}
+bmi_pc_smk_joined %>% 
+  group_by(year, country) %>% 
+  summarize(mean_bmi = mean(bmi))
+```
+
+```{r}
+# Create data subset for visualizing multiple categories
+bmi_pc_smk_mini <- filter(bmi_pc_smk_joined ,
+                   country %in% c("United States",
+                                  "Australia",
+                                  "Germany", "Nigeria", "Kenya", "Bahamas"))
+bmi_pc_smk_mini
+
+```
+```{r}
+# Map country to color
+ggplot(data = bmi_pc_smk_mini, 
+       mapping = aes(y = bmi, x = year, 
+                     group = country, 
+                     color = country)) +
+  geom_line(size = 1) +
+  geom_point(size = 2)
+```
+```{r}
+# Map country to color
+ggplot(data = bmi_pc_smk_mini, 
+       mapping = aes(y = prostate_deaths, x = year, 
+                     group = country, 
+                     color = country)) +
+  geom_line(size = 1) +
+  geom_point(size = 2)
+```
+
+```{r}
+vis_dat(bmi_pc_smk_mini)
+```
+
+```{r}
+inspect_cat(bmi_pc_smk_mini) %>% 
+  show_plot()
+```
+
+
+```{r}
+inspect_num(bmi_pc_smk_mini) %>% 
+  show_plot()
+```
+
+```{r}
+gtsummary::tbl_summary(bmi_pc_smk_mini)
+```
+
+```{r}
+bmi_pc_smk_mini_clean  <- bmi_pc_smk_mini %>%                       # replace “df” with your data-frame name
+  mutate(
+    prostate_deaths_num =
+      parse_number(prostate_deaths) *              # strip out digits / decimals
+      if_else(                                     # multiply by 1 000 when value ends with “k” or “K”
+        str_detect(prostate_deaths, regex("k$", ignore_case = TRUE)),
+        1000, 0
+      )
+  )
+bmi_pc_smk_mini_clean
+```
+
+
+
+
+```{r}
+ggplot(data = bmi_pc_smk_mini_clean, 
+       mapping = aes(x = year, 
+                     y = bmi, 
+                     color = country)) +
+  geom_line(size = 1) +
+  geom_point(mapping = aes(size = prostate_deaths_num),
+                           alpha = 0.5) +
+  scale_x_continuous(breaks = seq(from = 1980, to = 2008, by = 5)) +
+  geom_point() +
+  labs(x = "Year", 
+       y = "Body Mass Index, men,kg/m2",
+       title = "Body Mass Index of men in selected Countries, 1980-2008")
+```
+
+
+```{r}
+# ── Packages ─────────────────────────────────────────────
+library(plotly)        # interactive graphics
+library(RColorBrewer)  # Set2 qualitative palette
+
+# df_filtered is your data.frame/tibble with
+# columns: fertility_rate, child_mortality, continent, country, year
+
+# 1. Compute a sizeref so the largest bubble is ~60 px in diameter
+max_bubble_px <- 60
+sizeref <- 2 * max(df_filtered$child_mortality, na.rm = TRUE) / (max_bubble_px^2)
+
+# 2. Build the animated scatter (bubble) chart
+bubble <- plot_ly(
+  data    = df_filtered,
+  type    = "scatter",
+  mode    = "markers",
+  x       = ~fertility_rate,
+  y       = ~child_mortality,
+  frame   = ~year,                       # animation frame
+  size    = ~child_mortality,            # bubble area ≈ child mortality
+  color   = ~continent,
+  colors  = brewer.pal(length(unique(df_filtered$continent)), "Set2"),
+  text    = ~country,
+  hovertemplate = paste(
+    "<b>%{text}</b><br>",
+    "Year: %{frame}<br>",
+    "Fertility rate: %{x:.2f}<br>",
+    "Child mortality: %{y:.1f}<extra></extra>"
+  ),
+  marker = list(
+    sizemode = "area",
+    sizeref  = sizeref,
+    line     = list(width = 0.5, color = "rgba(0,0,0,0.3)"),
+    opacity  = 0.8
+  )
+) %>%
+  layout(
+    title  = list(text = "Fertility Rate vs Child Mortality (2000–2024)", x = 0.5),
+    xaxis  = list(title = "Fertility Rate (births per woman)"),
+    yaxis  = list(title = "Child Mortality Rate (per 1,000 live births)"),
+    margin = list(t = 40, b = 20, l = 20, r = 20),
+    height = 550
+  )
+
+# 3. Display
+bubble
+```
+
+
+
+
+```{r}
+# Total number of cases in the data set
+total_cases <- nrow(bmi_pc_smk_mini_clean)
+total_cases
+total_deaths<-sum(fluH7N9_china_2013$outcome == "Death",  na.rm = TRUE) # outcome coded "Death"
+total_deaths
+total_hospitalized<-sum(!is.na(fluH7N9_china_2013$date_of_hospitalisation))# non-missing hospitalisation dates
+total_hospitalized 
+```
+
+
+```{r}
+#––––– Packages –––––
+library(bslib)        # Quarto ≥1.5 / Shiny "value_box()" helper
+# If your project uses {bs4Dash}, swap to bs4Dash::valueBox()
+
+#––––– Reactive or static calculation –––––
+# Assume tibble `indicators` exists with columns: country, year, bmi
+
+global_mean_bmi <- bmi_pc_smk_mini_clean %>%
+  filter(year >= 1980, year <= 2008, !is.na(bmi)) %>%
+  summarise(mean_bmi = mean(bmi, na.rm = TRUE)) %>%
+  pull(mean_bmi)
+
+#––––– KPI Value-box (bslib) –––––
+bslib::value_box(
+  title  = "Global Mean BMI (1980 – 2008)",
+  value  = number(global_mean_bmi, accuracy = 0.1),  # e.g. "24.7"
+  showcase_icon = bsicons::bs_icon("people-fill"),   # optional FontAwesome/Bootstrap icon
+  theme_color   = "primary",                         # pick palette colour
+  p("Average body-mass index across all countries, 1980-2008")
+)
+```
+
+
+
+
+```{r}
+# Assume your cleaned tibble is called `indicators`
+# Columns: country, year, bmi, prostate_deaths_num, smokers_percent
+
+top_bmi_inc_tbl <-bmi_pc_smk_mini_clean |>
+  filter(year %in% c(1980, 2008)) |>
+  select(country, year, bmi) |>
+  pivot_wider(
+    names_from  = year,
+    values_from = bmi,
+    names_prefix = "bmi_"
+  ) |>
+  drop_na(bmi_1980, bmi_2008) |>
+  mutate(delta_bmi = bmi_2008 - bmi_1980) |>
+  arrange(desc(delta_bmi)) |>
+  slice_head(n = 5)
+
+# Interactive table (reactable) – ready for Quarto/Shiny
+reactable(
+  top_bmi_inc_tbl,
+  columns = list(
+    country   = colDef(name = "Country"),
+    bmi_1980  = colDef(name = "BMI 1980",  format = colFormat(digits = 1)),
+    bmi_2008  = colDef(name = "BMI 2008",  format = colFormat(digits = 1)),
+    delta_bmi = colDef(
+      name   = "Δ BMI 1980→2008",
+      format = colFormat(digits = 1),
+      style  = JS("function(cellInfo) {
+        const v = cellInfo.value;
+        return { color: v >= 0 ? 'green' : 'red', fontWeight: 'bold' };
+      }")
+    )
+  ),
+  striped       = TRUE,
+  highlight     = TRUE,
+  defaultSorted = "delta_bmi",
+  defaultSortOrder = "desc",
+  pagination    = FALSE
+)
+```
+
+
+
+```{r}
+#Interactive line plot – BMI trend per country
+  
+
+# Clean input  ----------------------------------------------------------
+# assume your tibble is `indicators`
+bmi_trend <- bmi_pc_smk_mini_clean %>%
+  filter(!is.na(bmi)) %>%               # keep rows with valid BMI
+  arrange(country, year)
+
+# Create a shared data object so the user can click / brush to isolate a country
+shared_bmi <- highlight_key(bmi_trend, ~country)
+
+# Static ggplot (one line per country) ----------------------------------
+g_bmi <- ggplot(shared_bmi,
+            aes(x = year,
+                y = bmi,
+                group = country,
+                colour = country,
+                text = paste0(
+                  "<b>", country, "</b>",
+                  "<br>Year: ", year,
+                  "<br>BMI: ", round(bmi, 1)
+                ))) +
+  geom_line(size = 1) +
+  geom_point(size = 1.5) +
+  scale_colour_viridis_d(option = "turbo", guide = "none") +  # hide legend; use click-isolate instead
+  labs(title = "BMI Trend by Country (1980 – 2008)",
+       x = NULL,
+       y = "Mean BMI") +
+  theme_minimal(base_size = 13)
+
+# Convert to Plotly & add interactivity ---------------------------------
+fig_bmi <- ggplotly(g_bmi, tooltip = "text") %>%
+  layout(hovermode = "closest") %>%
+  highlight(on  = "plotly_click",   # click a line to focus
+            off = "plotly_doubleclick",
+            opacityDim = 0.2,
+            color    = "red",
+            selected = attrs_selected(line = list(width = 4)))
+
+fig_bmi
+```
+
+
+
+
+```{r}
+# Country choropleth – Mean BMI (1980-2008)
+
+# 1. Summarise mean BMI per country (2002-2005) -------------------------
+bmi_mean <- bmi_pc_smk_mini_clean %>%                       # your tibble
+  filter(year %in% 1980:2008, !is.na(bmi)) %>%
+  group_by(country) %>%
+  summarise(mean_bmi = mean(bmi, na.rm = TRUE), .groups = "drop") %>%
+  mutate(iso3 = countrycode(country, "country.name", "iso3c"))
+
+# 2. Load world polygons & join -----------------------------------------
+world_sf <- rnaturalearth::ne_countries(scale = "medium",
+                                        returnclass = "sf") %>%
+  select(iso_a3, name_long, geometry)
+
+map_data <- world_sf %>%
+  left_join(bmi_mean, by = c("iso_a3" = "iso3"))     # some rows will be NA
+
+# 3. Define palette (colour-blind-safe) ---------------------------------
+pal <- colorNumeric(
+  palette = "viridis",
+  domain  = map_data$mean_bmi,
+  na.color = "grey90"
+)
+
+# 4. Build leaflet choropleth ------------------------------------------
+leaflet(map_data, options = leafletOptions(worldCopyJump = TRUE)) |>
+  addTiles() |>
+  addPolygons(
+    fillColor   = ~pal(mean_bmi),
+    weight      = 0.5,
+    opacity     = 1,
+    color       = "white",
+    dashArray   = "3",
+    fillOpacity = 0.8,
+    highlightOptions = highlightOptions(
+      weight      = 2,
+      color       = "#666",
+      dashArray   = "",
+      fillOpacity = 0.9,
+      bringToFront = TRUE),
+    label = ~sprintf(
+      "<strong>%s</strong><br/>Mean BMI (2002-05): %s",
+      name_long,
+      ifelse(is.na(mean_bmi), "NA", round(mean_bmi, 1))
+    ) |>
+      lapply(htmltools::HTML),
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "13px",
+      direction = "auto")
+  ) |>
+  addLegend(
+    pal     = pal,
+    values  = ~mean_bmi,
+    opacity = 0.7,
+    title   = "Mean BMI<br>(1980–2008)",
+    position = "bottomright"
+  )
+```
+
+
+
+```{r}
+#Interactive bar chart – Deaths by country & year
+
+# 0.  INPUT:  `indicators` tibble with prostate_deaths_num -------------
+# Columns assumed: country, year, prostate_deaths_num
+
+# 1. Summarise deaths per country-year  --------------------------------
+deaths_ctry_year <- bmi_pc_smk_mini_clean %>%
+  filter(!is.na(prostate_deaths_num)) %>%        # keep valid rows
+  group_by(country, year) %>%
+  summarise(deaths = sum(prostate_deaths_num), .groups = "drop")
+
+# 2. Reshape so each year is its own series (wide) ---------------------
+deaths_wide <- deaths_ctry_year %>%
+  pivot_wider(names_from = year,
+              values_from = deaths,
+              names_sort  = TRUE)             # ensures 1990 … 2008 order
+
+# 3. Build interactive grouped bar chart ------------------------------
+deaths_wide %>%
+  e_charts(country) %>%                       # x-axis categories = country
+  e_bar(`1990`, name = "1990") %>%
+  e_bar(`1998`, name = "1998") %>%
+  e_bar(`2000`, name = "2000") %>%
+  e_bar(`2008`, name = "2008") %>%
+  e_tooltip(trigger = "axis",
+            formatter = htmlwidgets::JS("
+              function(params){
+                let txt = `<b>${params[0].name}</b><br>`;
+                params.forEach(p => {
+                  if(p.value !== undefined && p.value !== null){
+                    txt += `${p.seriesName}: ${d3.format(',')(p.value)}<br>`;
+                  }
+                });
+                return txt;
+              }")
+  ) %>%
+  e_title("Prostate-Cancer Deaths by Country and Year") %>%
+  e_legend(top = 0) %>%
+  e_y_axis(name = "Deaths (count)") %>%
+  e_x_axis(axisLabel = list(interval = 0, rotate = 30)) %>%  # tilt labels if many countries
+  e_theme("infographic") %>%          # modern colour set (change to suit your palette)
+  e_animation(duration = 1200)        # smooth entrance animation
+
+```
+
+
+
+
+
+
+```{r}
+### MAP OF CASES PER PROVINCE
+province_summary <- fluH7N9_china_2013 %>% 
+  group_by(province) %>% 
+  summarise(total_cases = n()) 
+
+china_map <- rgeoboundaries::gb_adm1("china")
+
+# Check the keys to see if join will be successful
+setdiff(province_summary$province, china_map$shapeName)
+setdiff(china_map$shapeName, province_summary$province)
+# Some work to be done to harmonize these
+
+china_map <- china_map %>%
+  # Remove the strings Province, Municipality and Autonomous Region 
+  # to allow matching
+  mutate(province = str_trim(
+    str_remove(shapeName, "Province|Municipality|Autonomous Region")
+  ))
+
+# Check if join will work fine
+setdiff(province_summary$province, china_map$province)
+
+# Fix Guangdong, which based on a quick Google is actually Guangzhou
+china_map <- china_map %>% 
+  mutate(province = if_else(province == "Guangzhou", "Guangdong", province)) 
+  
+# Check again
+setdiff(province_summary$province, china_map$province)
+
+# Now join
+china_map_joined <- 
+  left_join(china_map, province_summary, by = "province") %>% 
+  # Create tooltip label 
+  mutate(tooltip_label = paste0(province, ": ", total_cases))
+
+china_map_plot <- ggplot(china_map_joined) +
+  geom_sf(aes(fill = total_cases, text = tooltip_label)) + 
+  theme_void() +
+  labs(fill = "Number of Cases", title = "Map of Provinces by Number of Cases") + 
+  theme(legend.position = "none")
+
+china_map_plot_ggplotly <- 
+  ggplotly(china_map_plot, tooltip = "text")
+china_map_plot_ggplotly
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+pacman::p_load(crosstalk, plotly)
+
+# Crosstalk shared data object
+# This allows the filter to interact with the plot
+shared_cantril_data <- highlight_key(cantril)
+
+cantril_plotly <- plot_ly(
+    shared_cantril_data,
+    x = ~Year,
+    y = ~`Cantril ladder score`,
+    color = ~Country,
+    type = "scatter",
+    mode = "lines+markers"
+) %>%
+    layout(yaxis = list(range = c(0, 10)))
+
+
+country_filter <- filter_select(
+    "country_filter",
+    "Select a country to examine",
+    shared_cantril_data,
+    ~Country,
+    multiple = TRUE
+)
+
+# Output the filter and the plot
+bscols(
+    list(country_filter, cantril_plotly)
+)
+
+# Note that the default countries will only be set when you knit the document.
+# Because it relies on the javascript snippet below, which is not rendered in the quarto preview.
+```
+
+<!-- CUSTOM JAVASCRIPT TO SET DEFAULT VALUES IN THE FILTER: -->
+<script>
+function filter_default() {
+  var default_countries = ["Norway", "Australia", "Germany", "Bolivia", "Colombia", "Bhutan"]; // Set default countries here
+  document.getElementById("country_filter").getElementsByClassName("selectized")[0].selectize.setValue(default_countries, false);
+}
+window.onload = filter_default;
+</script>
+
+
+
+```{r}
+
+```
+
+
