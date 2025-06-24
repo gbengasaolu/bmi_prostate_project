@@ -1,0 +1,173 @@
+---
+title: "Prostate-Cancer Deaths vs. BMI — 2008 Snapshot"
+author: "Olugbenga Asaolu"
+format: html
+editor: visual
+---
+
+```{r}
+################################################################################
+# Prostate-Cancer Deaths vs. BMI — 2008 Snapshot
+# Author: Senior Data Scientist (tidyverse & tidymodels stack)
+################################################################################
+
+if(!require('pacman')) install.packages('pacman')
+
+pacman::p_load(tidyverse,
+               janitor,
+               skimr,
+               tidymodels,
+               vip,
+               performance)
+
+
+# ── 0. Libraries ───────────────────────────────────────────────────────────────
+library(tidyverse)     # dplyr, ggplot2, readr, etc.
+library(janitor)       # clean_names, remove_empty
+library(skimr)         # quick univariate skims
+library(tidymodels)    # recipes, parsnip, workflows, tune
+library(vip)           # variable-importance plots
+library(performance)   # regression diagnostics
+```
+
+
+
+```{r}
+# ── 1. Wrangle ─────────────────────────────────────────────────────────────────
+df_2008 <- bmi_pc_smk_clean %>%                                      # raw tibble
+  filter(year == 2008) %>%                                           # snapshot
+  mutate(
+    # ensure BMI numeric
+    bmi = as.numeric(bmi),
+
+    # convert character “prostate_deaths” → numeric (strip ‘k’, commas, spaces)
+    prostate_deaths_chr = prostate_deaths,
+    prostate_deaths = str_remove_all(prostate_deaths_chr, ",|\\s*k$") %>% 
+                       as.numeric(),
+
+    # smokers_percent sometimes arrives as character
+    smokers_percent = as.numeric(smokers_percent)
+  ) %>% 
+  select(country, continent, bmi, smokers_percent, prostate_deaths) %>% 
+  drop_na(bmi, prostate_deaths)                                       # ML ready
+```
+
+
+```{r}
+# ── 2. Univariate Exploration ─────────────────────────────────────────────────
+skimr::skim(df_2008, bmi, prostate_deaths, smokers_percent)          # table
+
+ggplot(df_2008, aes(bmi)) + 
+  geom_histogram(binwidth = 0.4) + 
+  labs(title = "BMI distribution, adult males (2008)") +
+  theme_minimal()
+
+ggplot(df_2008, aes(prostate_deaths)) + 
+  geom_histogram(binwidth = 50) + 
+  labs(title = "Prostate-cancer deaths distribution (2008)") +
+  theme_minimal()
+```
+
+
+
+
+```{r}
+# ── 3. Bivariate Analysis ─────────────────────────────────────────────────────
+ggplot(df_2008, aes(bmi, prostate_deaths)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1) +
+  labs(
+    x = "Average BMI (adult males)",
+    y = "Prostate-cancer deaths",
+    title = "BMI vs. prostate-cancer deaths (scatter + OLS line)"
+  ) +
+  theme_minimal()
+
+cor.test(df_2008$bmi, df_2008$prostate_deaths, use = "complete.obs")
+```
+
+
+```{r}
+# ── 4. Multivariate Linear Regression ─────────────────────────────────────────
+lm_fit <- lm(prostate_deaths ~ bmi + smokers_percent + continent, data = df_2008)
+summary(lm_fit)
+performance::check_collinearity(lm_fit)      # VIFs
+```
+
+
+```{r}
+# ── 5. Machine-Learning Pipeline (tidymodels) ─────────────────────────────────
+set.seed(123)
+
+df_ml <- df_2008 %>% 
+  mutate(continent = factor(continent))
+
+# 5.1 split
+split  <- initial_split(df_ml, prop = 0.80, strata = prostate_deaths)
+train  <- training(split)
+test   <- testing(split)
+
+# 5.2 recipe
+rec <- recipe(prostate_deaths ~ ., data = train) %>% 
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% 
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_numeric_predictors())
+
+# 5.3 model spec – gradient boosted trees (efficient on tabular data)
+xgb_spec <- boost_tree(
+  mode           = "regression",
+  trees          = 1000,
+  tree_depth     = tune(),
+  learn_rate     = tune(),
+  loss_reduction = tune(),
+  mtry           = tune(),
+  sample_size    = tune()
+) %>% 
+  set_engine("xgboost")
+
+# 5.4 workflow
+wf <- workflow() %>% add_recipe(rec) %>% add_model(xgb_spec)
+
+# 5.5 hyper-parameter grid
+grid <- grid_latin_hypercube(
+  tree_depth(),
+  learn_rate(),
+  loss_reduction(),
+  mtry(range = c(1, 5)),
+  sample_size = sample_prop(),
+  size = 20
+)
+
+# 5.6 CV tuning
+cv_folds <- vfold_cv(train, v = 5, strata = prostate_deaths)
+
+tuned <- tune_grid(
+  wf,
+  resamples = cv_folds,
+  grid      = grid,
+  metrics   = metric_set(rmse, rsq)
+)
+
+best_params <- select_best(tuned, "rmse")
+final_wf   <- finalize_workflow(wf, best_params)
+
+# 5.7 final fit & evaluation
+final_fit  <- fit(final_wf, data = train)
+
+predict(final_fit, test) %>% 
+  bind_cols(test) %>% 
+  metrics(truth = prostate_deaths, estimate = .pred)
+
+# 5.8 variable importance
+final_fit %>% 
+  extract_fit_parsnip() %>% 
+  vip(num_features = 10)
+```
+
+
+
+```{r}
+# ── 6. END SCRIPT ─────────────────────────────────────────────────────────────
+
+```
+
